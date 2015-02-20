@@ -44,3 +44,8 @@ class Worker(ConsumerMixin):
 
     def on_command(self, body, message):
         logger.info(body)
+
+
+if __name__ == '__main__':
+    w = Worker('game-worker0')
+    w.run()
