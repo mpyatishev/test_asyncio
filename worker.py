@@ -44,6 +44,7 @@ class Worker(ConsumerMixin):
 
     def on_command(self, body, message):
         logger.info(body)
+        message.ack()
 
 
 if __name__ == '__main__':
