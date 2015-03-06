@@ -31,13 +31,13 @@ class Command(Producer):
         self.publish(command)
 
 
-class NewClient:
+class NewServer:
     max_clients = 1
     command_queues = {}
+    workers = []
 
     def __init__(self, loop):
         self.loop = loop
-        self.workers = []
         self.connection = Connection('amqp://localhost/')
         self.exchange = Exchange('commands', type='direct',
                                  durrable=False, delivery_mode='transient')
@@ -87,11 +87,14 @@ class NewClient:
             clients, worker = heapq.heappop(self.workers)
         except IndexError:
             clients = 0
-
-        if clients >= self.max_clients or clients == 0:
             worker = self.create_worker()
             self.command_queues[worker] = self.create_queue(worker)
             self.run_worker(worker)
+        else:
+            if clients >= self.max_clients:
+                worker = self.create_worker()
+                self.command_queues[worker] = self.create_queue(worker)
+                self.run_worker(worker)
 
         heapq.heappush(self.workers, (clients + 1, worker))
 
@@ -107,14 +110,14 @@ class NewClient:
 
     def run_worker(self, worker):
         w = Worker(worker)
-        self.loop.call_soon_threadsafe(w.run)
+        self.loop.run_in_executor(executor=None, callback=w.run)
 
 
 if __name__ == '__main__':
     random.seed()
 
     loop = asyncio.get_event_loop()
-    coro = loop.create_server(lambda: NewClient(loop), port=8888)
+    coro = loop.create_server(lambda: NewServer(loop), port=8888)
     server = loop.run_until_complete(coro)
     try:
         loop.run_forever()

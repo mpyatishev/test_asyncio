@@ -39,8 +39,9 @@ class Worker(ConsumerMixin):
         logger.setLevel(logging.INFO)
 
     def get_consumers(self, consumer, channel):
-        logger.info(self.queues)
-        return self.queues
+        return [
+            consumer([self.command_queue], callbacks=[self.on_command])
+        ]
 
     def on_command(self, body, message):
         logger.info(body)
