@@ -72,6 +72,7 @@ class NewServer:
 
     def eof_received(self):
         self.transport.close()
+        logger.info('eof received')
 
     def auth(self, message):
         if 'user' in message and 'passwd' in message\
@@ -86,15 +87,15 @@ class NewServer:
         try:
             clients, worker = heapq.heappop(self.workers)
         except IndexError:
+            clients = None
+
+        if clients is None or clients >= self.max_clients:
+            if clients is not None:
+                heapq.heappush(self.workers, (clients, worker))
             clients = 0
             worker = self.create_worker()
             self.command_queues[worker] = self.create_queue(worker)
             self.run_worker(worker)
-        else:
-            if clients >= self.max_clients:
-                worker = self.create_worker()
-                self.command_queues[worker] = self.create_queue(worker)
-                self.run_worker(worker)
 
         heapq.heappush(self.workers, (clients + 1, worker))
 
