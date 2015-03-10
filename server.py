@@ -9,6 +9,8 @@ import logging
 import random
 import time
 
+from concurrent.futures import ProcessPoolExecutor
+
 from kombu import (
     Connection,
     Exchange,
@@ -35,12 +37,14 @@ class NewServer:
     max_clients = 1
     command_queues = {}
     workers = []
+    clients_to_workers = {}
+    connection = Connection('amqp://localhost/')
+    exchange = Exchange('commands', type='direct')
+    executor = ProcessPoolExecutor()
+    loop = None
 
     def __init__(self, loop):
         self.loop = loop
-        self.connection = Connection('amqp://localhost/')
-        self.exchange = Exchange('commands', type='direct',
-                                 durrable=False, delivery_mode='transient')
 
     def connection_made(self, transport):
         info = transport.get_extra_info('peername')
@@ -48,10 +52,19 @@ class NewServer:
         self.transport = transport
 
     def connection_lost(self, exc):
-        info = self.transport.get_extra_info('peername')
-        logger.info('connection to %s closed' % (info,))
+        client = self.transport.get_extra_info('peername')
+        logger.info('connection to %s closed' % (client,))
         if exc:
             logger.info(exc)
+
+        worker = self.clients_to_workers.pop(client, None)
+        if worker is not None:
+            for (clients, w) in self.workers:
+                if w == worker:
+                    self.workers.remove((clients, w))
+                    clients -= 1
+                    heapq.heappush(self.workers, (clients, w))
+                    break
 
     def data_received(self, data):
         message = json.loads(data.decode())
@@ -65,6 +78,9 @@ class NewServer:
             resp = {
                 'token': token,
             }
+
+            client = self.transport.get_extra_info('peername')
+            self.clients_to_workers[client] = worker
 
             self.transport.write(json.dumps(resp).encode())
         else:
@@ -95,7 +111,7 @@ class NewServer:
             clients = 0
             worker = self.create_worker()
             self.command_queues[worker] = self.create_queue(worker)
-            self.run_worker(worker)
+            future = self.run_worker(worker)
 
         heapq.heappush(self.workers, (clients + 1, worker))
 
@@ -110,8 +126,7 @@ class NewServer:
         return queue
 
     def run_worker(self, worker):
-        w = Worker(worker)
-        self.loop.run_in_executor(executor=None, callback=w.run)
+        return self.loop.run_in_executor(self.executor, Worker, worker)
 
 
 if __name__ == '__main__':
