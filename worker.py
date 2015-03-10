@@ -5,7 +5,6 @@ import logging
 
 from kombu import (
     Connection,
-    Consumer,
     Exchange,
     Queue,
 )
@@ -21,14 +20,14 @@ class Worker(ConsumerMixin):
     def __init__(self, worker):
         self.worker = worker
         self.connection = connection
-        self.command_queue = Queue('commands', exchange, routing_key=self.worker)
-        self.queues = [
-            Consumer(connection, self.command_queue, callbacks=[self.on_command]),
-        ]
+        self.command_queue = Queue(self.worker, exchange, routing_key=self.worker)
+        self.command_queue.maybe_bind(self.connection)
 
         self.set_logger()
 
-        logger.info('worker %s' % self.worker)
+        logger.info('worker %s created' % self.worker)
+
+        self.run()
 
     def set_logger(self):
         global logger
@@ -40,11 +39,11 @@ class Worker(ConsumerMixin):
 
     def get_consumers(self, consumer, channel):
         return [
-            consumer([self.command_queue], callbacks=[self.on_command])
+            consumer(queues=self.command_queue, callbacks=[self.on_command])
         ]
 
     def on_command(self, body, message):
-        logger.info(body)
+        logger.info('worker %s received: %s' % (self.worker, body))
         message.ack()
 
 
