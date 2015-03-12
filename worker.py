@@ -9,17 +9,7 @@ import socket
 import threading
 import time
 
-from kombu import (
-    Connection,
-    Exchange,
-    Queue,
-)
-from kombu.mixins import ConsumerMixin
-
 logger = None
-
-exchange = Exchange('commands', type='direct')
-connection = Connection('amqp://localhost/')
 
 q = queue.Queue()
 
@@ -45,44 +35,35 @@ class GameProtocol(asyncio.Protocol):
         self.transport.close()
 
 
-class Server(threading.Thread):
-    def __init__(self, *args, **kwargs):
+class Game(threading.Thread):
+    def __init__(self, loop, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.loop)
-        self.thread = threading.Thread(target=self.loop.run_forever)
 
     def run(self):
-        self.thread.start()
         while True:
             try:
                 sock = q.get(block=False)
             except queue.Empty:
                 pass
             else:
-                # logger.info(sock)
-                coro = self.loop.create_connection(lambda: GameProtocol(self.loop),
-                                                   sock=sock)
-                self.loop.call_soon_threadsafe(self.loop.create_task, coro)
+                logger.info(threading.active_count())
+
             time.sleep(0.01)
 
 
-class Worker(ConsumerMixin):
+class Worker:
     def __init__(self, worker, server_sock):
         self.worker = worker
         self.server_sock = server_sock
         self.socks = []
-        self.server = Server()
-        self.connection = connection
-        self.command_queue = Queue(self.worker, exchange, routing_key=self.worker)
-        self.command_queue.maybe_bind(self.connection)
+        self.loop = asyncio.new_event_loop()
+        self.loop.add_reader(self.server_sock, self.reader)
 
         self.set_logger()
 
         logger.info('worker %s created' % self.worker)
 
-        self.server.start()
-        self.run()
+        self.start()
 
     def set_logger(self):
         global logger
@@ -92,10 +73,8 @@ class Worker(ConsumerMixin):
         logger.addHandler(ch)
         logger.setLevel(logging.INFO)
 
-    def get_consumers(self, consumer, channel):
-        return [
-            consumer(queues=self.command_queue, callbacks=[self.on_command])
-        ]
+    def start(self):
+        self.loop.run_forever()
 
     def on_command(self, body, message):
         logger.info('worker %s received: %s' % (self.worker, body))
@@ -105,28 +84,41 @@ class Worker(ConsumerMixin):
         if 'queue' not in body:
             return
 
-        msg, fds = self.recv_sock()
-        msg = json.loads(msg.decode())
-        if 'sock' in msg:
-            family = msg['family']
-            type = msg['type']
-            proto = msg['proto']
-            for fd in fds:
-                sock = socket.fromfd(fd, family, type, proto)
-                sock.setblocking(False)
-                self.socks.append(sock)
-                q.put(sock)
+    def reader(self):
+        data, fds = self.recv_sock()
+        for msg in data.decode().split("\r\n"):
+            if not msg:
+                continue
+            try:
+                msg = json.loads(msg)
+            except ValueError as e:
+                logger.info(e)
+                continue
+            if 'sock' in msg:
+                family = msg['family']
+                type = msg['type']
+                proto = msg['proto']
+                for fd in fds:
+                    sock = socket.fromfd(fd, family, type, proto)
+                    sock.setblocking(False)
+                    self.socks.append(sock)
+                    coro = self.loop.create_connection(lambda: GameProtocol(self.loop),
+                                                    sock=sock)
+                    self.loop.create_task(coro)
+            else:
+                logger.info('worker %s received: %s' % (self.worker, msg))
 
     def recv_sock(self):
         fds = array.array("i")
-        msglen = 90
+        msglen = 4096
         maxfds = 5
         msg, ancdata, flags, addr = self.server_sock.recvmsg(
             msglen, socket.CMSG_LEN(maxfds * fds.itemsize))
         for cmsg_level, cmsg_type, cmsg_data in ancdata:
             if (cmsg_level == socket.SOL_SOCKET and cmsg_type == socket.SCM_RIGHTS):
                 # Append data, ignoring any truncated integers at the end.
-                fds.fromstring(cmsg_data[:len(cmsg_data) - (len(cmsg_data) % fds.itemsize)])
+                fds.fromstring(
+                    cmsg_data[:len(cmsg_data) - (len(cmsg_data) % fds.itemsize)])
         return msg, list(fds)
 
 

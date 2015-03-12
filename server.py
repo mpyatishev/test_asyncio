@@ -13,12 +13,6 @@ import time
 
 from concurrent.futures import ProcessPoolExecutor
 
-from kombu import (
-    Connection,
-    Exchange,
-    Producer,
-)
-
 from worker import Worker
 
 
@@ -28,21 +22,11 @@ logger.addHandler(ch)
 logger.setLevel(logging.INFO)
 
 
-class Command(Producer):
-    command = None
-
-    def send_command(self, command):
-        self.publish(command)
-
-
 class NewServer:
     max_clients = 5
-    command_queues = {}
     workers = []
     clients_to_workers = {}
     socks_to_workers = {}
-    connection = Connection('amqp://localhost/')
-    exchange = Exchange('commands', type='direct')
     executor = ProcessPoolExecutor(4)
     loop = None
 
@@ -77,7 +61,7 @@ class NewServer:
         if token:
             worker = self.get_worker()
             command = {'queue': token}
-            self.command_queues[worker].send_command(json.dumps(command))
+            self.send_msg(worker, command)
             self.send_sock(worker)
             resp = {
                 'token': token,
@@ -116,7 +100,6 @@ class NewServer:
                 heapq.heappush(self.workers, (clients, worker))
             clients = 0
             worker = self.create_worker()
-            self.command_queues[worker] = self.create_queue(worker)
             # future = self.run_worker(worker)
             self.run_worker(worker)
 
@@ -127,16 +110,16 @@ class NewServer:
     def create_worker(self):
         return 'game-worker%s' % len(self.workers)
 
-    def create_queue(self, worker):
-        queue = Command(channel=self.connection, exchange=self.exchange,
-                        routing_key=worker)
-        return queue
-
     def run_worker(self, worker):
         socks = socket.socketpair()
         self.socks_to_workers[worker] = socks[0]
         future = self.loop.run_in_executor(self.executor, Worker, worker, socks[1])
         return future
+
+    def send_msg(self, worker, msg, *args):
+        worker_sock = self.socks_to_workers[worker]
+        msg = json.dumps(msg) + "\r\n"
+        worker_sock.sendmsg([msg.encode()], *args)
 
     def send_sock(self, worker):
         sock = self.transport.get_extra_info('socket')
@@ -148,10 +131,12 @@ class NewServer:
             'proto': sock.proto,
         }
         fds = [sock.fileno()]
-        worker_sock = self.socks_to_workers[worker]
-        worker_sock.sendmsg([json.dumps(msg).encode()],
-                            [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
-                              array.array("i", fds))])
+        # worker_sock = self.socks_to_workers[worker]
+        # worker_sock.sendmsg([json.dumps(msg).encode()],
+        #                     [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
+        #                       array.array("i", fds))])
+        self.send_msg(worker, msg, [(socket.SOL_SOCKET,
+                                     socket.SCM_RIGHTS, array.array("i", fds))])
 
 if __name__ == '__main__':
     random.seed()
