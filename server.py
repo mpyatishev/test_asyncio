@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import array
 import asyncio
 import hashlib
 import heapq
 import json
 import logging
 import random
+import socket
 import time
 
 from concurrent.futures import ProcessPoolExecutor
@@ -38,12 +40,13 @@ class NewServer:
     command_queues = {}
     workers = []
     clients_to_workers = {}
+    socks_to_workers = {}
     connection = Connection('amqp://localhost/')
     exchange = Exchange('commands', type='direct')
     executor = ProcessPoolExecutor()
     loop = None
 
-    def __init__(self, loop):
+    def __init__(self, loop, *args, **kwargs):
         self.loop = loop
 
     def connection_made(self, transport):
@@ -57,14 +60,14 @@ class NewServer:
         if exc:
             logger.info(exc)
 
-        worker = self.clients_to_workers.pop(client, None)
-        if worker is not None:
-            for (clients, w) in self.workers:
-                if w == worker:
-                    self.workers.remove((clients, w))
-                    clients -= 1
-                    heapq.heappush(self.workers, (clients, w))
-                    break
+        # worker = self.clients_to_workers.pop(client, None)
+        # if worker is not None:
+        #     for (clients, w) in self.workers:
+        #         if w == worker:
+        #             self.workers.remove((clients, w))
+        #             clients -= 1
+        #             heapq.heappush(self.workers, (clients, w))
+        #             break
 
     def data_received(self, data):
         message = json.loads(data.decode())
@@ -75,6 +78,7 @@ class NewServer:
             worker = self.get_worker()
             command = {'queue': token}
             self.command_queues[worker].send_command(json.dumps(command))
+            self.send_sock(worker)
             resp = {
                 'token': token,
             }
@@ -85,6 +89,8 @@ class NewServer:
             self.transport.write(json.dumps(resp).encode())
         else:
             self.transport.write('No such user\n'.encode())
+
+        self.transport.close()
 
     def eof_received(self):
         self.transport.close()
@@ -111,7 +117,8 @@ class NewServer:
             clients = 0
             worker = self.create_worker()
             self.command_queues[worker] = self.create_queue(worker)
-            future = self.run_worker(worker)
+            # future = self.run_worker(worker)
+            self.run_worker(worker)
 
         heapq.heappush(self.workers, (clients + 1, worker))
 
@@ -126,8 +133,24 @@ class NewServer:
         return queue
 
     def run_worker(self, worker):
-        return self.loop.run_in_executor(self.executor, Worker, worker)
+        socks = socket.socketpair()
+        self.socks_to_workers[worker] = socks[0]
+        future = self.loop.run_in_executor(self.executor, Worker, worker, socks[1])
+        return future
 
+    def send_sock(self, worker):
+        sock = self.transport.get_extra_info('socket')
+        logger.info(sock)
+        msg = {
+            'sock': True,
+            'family': sock.family,
+            'type': sock.type,
+            'proto': sock.proto,
+        }
+        fds = [sock.fileno()]
+        worker_sock = self.socks_to_workers[worker]
+        worker_sock.sendmsg([json.dumps(msg).encode()], [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
+                                                 array.array("i", fds))])
 
 if __name__ == '__main__':
     random.seed()

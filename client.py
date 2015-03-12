@@ -6,6 +6,7 @@
 import asyncio
 import json
 import logging
+import time
 
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,13 @@ class NewClient:
     def data_received(self, data):
         message = json.loads(data.decode())
         logger.info('data: %s' % message)
+
+        time.sleep(5)
+        logger.info('sending')
+        self.transport.write('help!'.encode())
+        time.sleep(5)
+        logger.info('sending')
+        self.transport.write('help!'.encode())
 
     def eof_received(self):
         self.transport.close()
