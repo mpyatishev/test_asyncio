@@ -24,6 +24,27 @@ connection = Connection('amqp://localhost/')
 q = queue.Queue()
 
 
+class GameProtocol(asyncio.Protocol):
+    def __init__(self, loop):
+        self.loop = loop
+        self.transport = None
+
+    def connection_made(self, transport):
+        self.transport = transport
+
+    def connection_lost(self, exc):
+        info = self.transport.get_extra_info('peername')
+        logger.info('connection to %s closed' % (info,))
+        if exc:
+            logger.info(exc)
+
+    def data_received(self, data):
+        logger.info(data.decode())
+
+    def eof_received(self):
+        self.transport.close()
+
+
 class Server(threading.Thread):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -39,14 +60,11 @@ class Server(threading.Thread):
             except queue.Empty:
                 pass
             else:
-                logger.info(sock)
-                self.loop.add_reader(sock, self.reader, sock)
-            time.sleep(0.5)
-            # logger.info(threading.active_count())
-
-    def reader(self, sock):
-        data = sock.recv(5)
-        logger.info(data.decode())
+                # logger.info(sock)
+                coro = self.loop.create_connection(lambda: GameProtocol(self.loop),
+                                                   sock=sock)
+                self.loop.call_soon_threadsafe(self.loop.create_task, coro)
+            time.sleep(0.01)
 
 
 class Worker(ConsumerMixin):
@@ -81,18 +99,11 @@ class Worker(ConsumerMixin):
 
     def on_command(self, body, message):
         logger.info('worker %s received: %s' % (self.worker, body))
-
-        body = json.loads(body)
-        if 'sock' in body:
-            fd = body['sock']
-            family = body['family']
-            type = body['type']
-            proto = body['proto']
-            sock = socket.fromfd(fd, family, type, proto)
-            self.socks.append(sock)
-            q.put(sock)
-
+        body = json.dumps(body)
         message.ack()
+
+        if 'queue' not in body:
+            return
 
         msg, fds = self.recv_sock()
         msg = json.loads(msg.decode())
@@ -102,6 +113,7 @@ class Worker(ConsumerMixin):
             proto = msg['proto']
             for fd in fds:
                 sock = socket.fromfd(fd, family, type, proto)
+                sock.setblocking(False)
                 self.socks.append(sock)
                 q.put(sock)
 
