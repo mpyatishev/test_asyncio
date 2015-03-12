@@ -36,14 +36,14 @@ class Command(Producer):
 
 
 class NewServer:
-    max_clients = 1
+    max_clients = 5
     command_queues = {}
     workers = []
     clients_to_workers = {}
     socks_to_workers = {}
     connection = Connection('amqp://localhost/')
     exchange = Exchange('commands', type='direct')
-    executor = ProcessPoolExecutor()
+    executor = ProcessPoolExecutor(4)
     loop = None
 
     def __init__(self, loop, *args, **kwargs):
@@ -140,7 +140,7 @@ class NewServer:
 
     def send_sock(self, worker):
         sock = self.transport.get_extra_info('socket')
-        logger.info(sock)
+        # logger.info(sock)
         msg = {
             'sock': True,
             'family': sock.family,
@@ -149,8 +149,9 @@ class NewServer:
         }
         fds = [sock.fileno()]
         worker_sock = self.socks_to_workers[worker]
-        worker_sock.sendmsg([json.dumps(msg).encode()], [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
-                                                 array.array("i", fds))])
+        worker_sock.sendmsg([json.dumps(msg).encode()],
+                            [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
+                              array.array("i", fds))])
 
 if __name__ == '__main__':
     random.seed()
