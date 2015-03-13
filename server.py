@@ -3,6 +3,7 @@
 
 import array
 import asyncio
+import functools
 import hashlib
 import heapq
 import json
@@ -13,6 +14,7 @@ import time
 
 from concurrent.futures import ProcessPoolExecutor
 
+from utils import send_msg, recv_msg
 from worker import Worker
 
 
@@ -27,7 +29,7 @@ class NewServer:
     workers = []
     clients_to_workers = {}
     socks_to_workers = {}
-    executor = ProcessPoolExecutor(4)
+    executor = ProcessPoolExecutor()
     loop = None
 
     def __init__(self, loop, *args, **kwargs):
@@ -43,15 +45,6 @@ class NewServer:
         logger.info('connection to %s closed' % (client,))
         if exc:
             logger.info(exc)
-
-        # worker = self.clients_to_workers.pop(client, None)
-        # if worker is not None:
-        #     for (clients, w) in self.workers:
-        #         if w == worker:
-        #             self.workers.remove((clients, w))
-        #             clients -= 1
-        #             heapq.heappush(self.workers, (clients, w))
-        #             break
 
     def data_received(self, data):
         message = json.loads(data.decode())
@@ -114,12 +107,13 @@ class NewServer:
         socks = socket.socketpair()
         self.socks_to_workers[worker] = socks[0]
         future = self.loop.run_in_executor(self.executor, Worker, worker, socks[1])
+        self.loop.add_reader(socks[0], self.reader, socks[0])
+        future.add_done_callback(functools.partial(self.worker_done, worker))
         return future
 
     def send_msg(self, worker, msg, *args):
         worker_sock = self.socks_to_workers[worker]
-        msg = json.dumps(msg) + "\r\n"
-        worker_sock.sendmsg([msg.encode()], *args)
+        send_msg(worker_sock, msg)
 
     def send_sock(self, worker):
         sock = self.transport.get_extra_info('socket')
@@ -131,19 +125,48 @@ class NewServer:
             'proto': sock.proto,
         }
         fds = [sock.fileno()]
-        # worker_sock = self.socks_to_workers[worker]
-        # worker_sock.sendmsg([json.dumps(msg).encode()],
-        #                     [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
-        #                       array.array("i", fds))])
-        self.send_msg(worker, msg, [(socket.SOL_SOCKET,
+        worker_sock = self.socks_to_workers[worker]
+        send_msg(worker_sock, msg, [(socket.SOL_SOCKET,
                                      socket.SCM_RIGHTS, array.array("i", fds))])
+
+    def reader(self, sock):
+        msg, fds = recv_msg(sock)
+        # logger.info('dispatcher: %s' % msg.decode())
+        for data in msg.decode().split('\r\n'):
+            if not data:
+                continue
+            client = json.loads(data)
+            self.client_disconnected(client)
+
+    def client_disconnected(self, client):
+        if not isinstance(client, tuple):
+            client = tuple(client)
+
+        worker = self.clients_to_workers.pop(client, None)
+        if worker is not None:
+            for (clients, w) in self.workers:
+                if w == worker:
+                    self.workers.remove((clients, w))
+                    clients -= 1
+                    heapq.heappush(self.workers, (clients, w))
+                    break
+
+    def worker_done(self, worker, future):
+        logger.info('%s done' % worker)
+        self.socks_to_workers[worker].close()
+        del self.socks_to_workers[worker]
+        for (clients, w) in self.workers:
+            if w == worker:
+                self.workers.remove((clients, w))
+                break
+
 
 if __name__ == '__main__':
     random.seed()
 
     loop = asyncio.get_event_loop()
     coro = loop.create_server(lambda: NewServer(loop), port=8888)
-    server = loop.run_until_complete(coro)
+    loop.run_until_complete(coro)
     try:
         loop.run_forever()
     except KeyboardInterrupt:

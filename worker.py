@@ -2,12 +2,15 @@
 
 import array
 import asyncio
+import functools
 import json
 import logging
 import queue
 import socket
 import threading
 import time
+
+from utils import send_msg, recv_msg
 
 logger = None
 
@@ -23,8 +26,8 @@ class GameProtocol(asyncio.Protocol):
         self.transport = transport
 
     def connection_lost(self, exc):
-        info = self.transport.get_extra_info('peername')
-        logger.info('connection to %s closed' % (info,))
+        client = self.transport.get_extra_info('peername')
+        logger.info('connection to %s closed' % (client,))
         if exc:
             logger.info(exc)
 
@@ -75,17 +78,10 @@ class Worker:
 
     def start(self):
         self.loop.run_forever()
-
-    def on_command(self, body, message):
-        logger.info('worker %s received: %s' % (self.worker, body))
-        body = json.dumps(body)
-        message.ack()
-
-        if 'queue' not in body:
-            return
+        self.loop.close()
 
     def reader(self):
-        data, fds = self.recv_sock()
+        data, fds = recv_msg(self.server_sock)
         for msg in data.decode().split("\r\n"):
             if not msg:
                 continue
@@ -103,23 +99,19 @@ class Worker:
                     sock.setblocking(False)
                     self.socks.append(sock)
                     coro = self.loop.create_connection(lambda: GameProtocol(self.loop),
-                                                    sock=sock)
-                    self.loop.create_task(coro)
+                                                       sock=sock)
+                    future = self.loop.create_task(coro)
+                    future.add_done_callback(functools.partial(self.client_disconnected,
+                                                               sock.getpeername()))
             else:
                 logger.info('worker %s received: %s' % (self.worker, msg))
 
-    def recv_sock(self):
-        fds = array.array("i")
-        msglen = 4096
-        maxfds = 5
-        msg, ancdata, flags, addr = self.server_sock.recvmsg(
-            msglen, socket.CMSG_LEN(maxfds * fds.itemsize))
-        for cmsg_level, cmsg_type, cmsg_data in ancdata:
-            if (cmsg_level == socket.SOL_SOCKET and cmsg_type == socket.SCM_RIGHTS):
-                # Append data, ignoring any truncated integers at the end.
-                fds.fromstring(
-                    cmsg_data[:len(cmsg_data) - (len(cmsg_data) % fds.itemsize)])
-        return msg, list(fds)
+    def client_disconnected(self, client, future):
+        send_msg(self.server_sock, client)
+
+        tasks = future.all_tasks(self.loop)
+        if not tasks or (future in tasks and len(tasks) == 1):
+            self.loop.stop()
 
 
 if __name__ == '__main__':
