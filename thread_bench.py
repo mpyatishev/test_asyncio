@@ -6,9 +6,12 @@ import random
 
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
+import numpy as np
+
 
 def worker(max_len=150):
     array = [[0] * max_len] * max_len
+    # array = np.zeros((max_len, max_len), dtype=int)
     for i in range(max_len):
         for j in range(max_len):
             array[i][j] = random.randint(0, 98)
