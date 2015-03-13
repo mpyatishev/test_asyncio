@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 ch = logging.StreamHandler()
 logger.addHandler(ch)
 logger.setLevel(logging.INFO)
-max_clients = 20
+max_clients = 60
 
 
 class NewClient:
