@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 ch = logging.StreamHandler()
 logger.addHandler(ch)
 logger.setLevel(logging.INFO)
-max_clients = 60
+max_clients = 2
 
 
 class NewClient:
@@ -23,6 +23,7 @@ class NewClient:
         self.passwd = 'secret'
         self.client_no = client_no
         self.name = self.get_name()
+        self._disconnected = False
 
     def connection_made(self, transport):
         self.transport = transport
@@ -37,7 +38,8 @@ class NewClient:
         logger.info('connection to %s closed' % (info,))
         if exc:
             logger.info(exc)
-        self.loop.stop()
+
+        self._disconnected = True
 
     def data_received(self, data):
         message = json.loads(data.decode())
@@ -48,19 +50,43 @@ class NewClient:
         logger.info('%s: sending message' % self.name)
         self.transport.write(str(self.name + ': help!').encode())
 
+        self.transport.close()
+
     def eof_received(self):
         self.transport.close()
 
     def get_name(self):
         return 'client%s' % self.client_no
 
+    def disconnected(self):
+        return self._disconnected
+
+
+@asyncio.coroutine
+def wait_clients(loop, clients):
+    protocols = []
+
+    for client in clients:
+        transport, protocol = client.result()
+        protocols.append(protocol)
+
+    while True:
+        for protocol in protocols:
+            if protocol.disconnected():
+                protocols.remove(protocol)
+        if not protocols:
+            break
+
 
 if __name__ == '__main__':
+    clients = []
     loop = asyncio.get_event_loop()
     for i in range(max_clients):
         coro = loop.create_connection(lambda i=i: NewClient(loop, i),
                                       '127.0.0.1', port=8888)
-        loop.create_task(coro)
+        clients.append(loop.create_task(coro))
     time.sleep(3)
-    loop.run_forever()
+    loop.run_until_complete(asyncio.wait(clients))
+    # loop.run_until_complete(wait_clients(loop, clients))
+    # loop.run_forever()
     loop.close()

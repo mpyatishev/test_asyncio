@@ -5,7 +5,12 @@ import socket
 
 def send_msg(sock, msg, *args):
     msg = json.dumps(msg) + "\r\n"
-    sock.sendmsg([msg.encode()], *args)
+    try:
+        sock.sendmsg([msg.encode()], *args)
+    except IOError as e:
+        print(e)
+        print(sock)
+
 
 def recv_msg(sock):
     fds = array.array("i")

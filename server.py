@@ -3,12 +3,13 @@
 
 import array
 import asyncio
-import functools
 import hashlib
 import heapq
 import json
 import logging
+import os
 import random
+import signal
 import socket
 import time
 
@@ -29,6 +30,7 @@ class NewServer:
     workers = []
     clients_to_workers = {}
     socks_to_workers = {}
+    pids_to_workers = {}
     executor = ProcessPoolExecutor()
     loop = None
 
@@ -47,6 +49,7 @@ class NewServer:
             logger.info(exc)
 
     def data_received(self, data):
+        logger.info(data.decode())
         message = json.loads(data.decode())
         logger.info('data: %s' % message)
 
@@ -106,10 +109,16 @@ class NewServer:
     def run_worker(self, worker):
         socks = socket.socketpair()
         self.socks_to_workers[worker] = socks[0]
-        future = self.loop.run_in_executor(self.executor, Worker, worker, socks[1])
-        self.loop.add_reader(socks[0], self.reader, socks[0])
-        future.add_done_callback(functools.partial(self.worker_done, worker))
-        return future
+        pid = os.fork()
+        if pid:
+            self.pids_to_workers[worker] = pid
+            socks[1].close()
+            self.loop.add_reader(socks[0], self.reader, socks[0])
+        else:
+            socks[0].close()
+            asyncio.set_event_loop(None)
+            Worker(worker, socks[1])
+            os._exit(os.EX_OK)
 
     def send_msg(self, worker, msg, *args):
         worker_sock = self.socks_to_workers[worker]
@@ -131,12 +140,18 @@ class NewServer:
 
     def reader(self, sock):
         msg, fds = recv_msg(sock)
-        # logger.info('dispatcher: %s' % msg.decode())
+        logger.info('dispatcher: %s' % msg.decode())
         for data in msg.decode().split('\r\n'):
             if not data:
                 continue
-            client = json.loads(data)
-            self.client_disconnected(client)
+            data = json.loads(data)
+            if 'client' in data:
+                self.client_disconnected(data['client'])
+            elif 'done' in data:
+                pid = data['done']
+                worker = self.get_worker_by_pid(pid)
+                self.worker_done(worker)
+                os.kill(pid, signal.SIGTERM)
 
     def client_disconnected(self, client):
         if not isinstance(client, tuple):
@@ -151,8 +166,14 @@ class NewServer:
                     heapq.heappush(self.workers, (clients, w))
                     break
 
-    def worker_done(self, worker, future):
+    def get_worker_by_pid(self, pid):
+        for (worker, wpid) in self.pids_to_workers.items():
+            if wpid == pid:
+                return worker
+
+    def worker_done(self, worker):
         logger.info('%s done' % worker)
+        self.loop.remove_reader(self.socks_to_workers[worker])
         self.socks_to_workers[worker].close()
         del self.socks_to_workers[worker]
         for (clients, w) in self.workers:
