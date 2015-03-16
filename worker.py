@@ -69,15 +69,16 @@ class Worker:
         self.socks = []
         self.loop = asyncio.new_event_loop()
         self.loop.add_reader(self.server_sock, self.reader)
+        self.main_task = self.loop.create_task(self._main())
         self.clients = []
 
-        self.set_logger()
+        self._set_logger()
 
         logger.info('worker %s created' % self.worker)
 
         self.start()
 
-    def set_logger(self):
+    def _set_logger(self):
         global logger
 
         logger = logging.getLogger(self.worker + __name__)
@@ -85,8 +86,18 @@ class Worker:
         logger.addHandler(ch)
         logger.setLevel(logging.INFO)
 
+    @asyncio.coroutine
+    def _main(self):
+        while True:
+            yield from asyncio.sleep(1, loop=self.loop)
+            if not self.clients:
+                logger.info('shutting down')
+                break
+        self.loop.stop()
+
     def start(self):
-        self.loop.run_forever()
+        # self.loop.run_forever()
+        self.loop.run_until_complete(self.main_task)
         self.loop.close()
         send_msg(self.server_sock, {'done': os.getpid()})
         self.server_sock.close()
@@ -126,9 +137,6 @@ class Worker:
     def client_disconnected(self, client):
         send_msg(self.server_sock, client)
         self.clients.remove(client)
-
-        if not self.clients:
-            self.loop.stop()
 
 
 if __name__ == '__main__':
