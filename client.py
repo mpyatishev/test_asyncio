@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 ch = logging.StreamHandler()
 logger.addHandler(ch)
 logger.setLevel(logging.INFO)
-max_clients = 2
+max_clients = 100
 
 
 class NewClient:
@@ -76,6 +76,7 @@ def wait_clients(loop, clients):
                 protocols.remove(protocol)
         if not protocols:
             break
+        yield
 
 
 if __name__ == '__main__':
@@ -87,6 +88,6 @@ if __name__ == '__main__':
         clients.append(loop.create_task(coro))
     time.sleep(3)
     loop.run_until_complete(asyncio.wait(clients))
-    # loop.run_until_complete(wait_clients(loop, clients))
+    loop.run_until_complete(wait_clients(loop, clients))
     # loop.run_forever()
     loop.close()
