@@ -151,7 +151,6 @@ class NewServer:
                 pid = data['done']
                 worker = self.get_worker_by_pid(pid)
                 self.worker_done(worker)
-                os.kill(pid, signal.SIGTERM)
 
     def client_disconnected(self, client):
         if not isinstance(client, tuple):
@@ -172,6 +171,7 @@ class NewServer:
                 return worker
 
     def worker_done(self, worker):
+        result = os.waitpid(self.pids_to_workers[worker], 0)
         logger.info('%s done' % worker)
         self.loop.remove_reader(self.socks_to_workers[worker])
         self.socks_to_workers[worker].close()
@@ -180,6 +180,11 @@ class NewServer:
             if w == worker:
                 self.workers.remove((clients, w))
                 break
+
+    @asyncio.coroutine
+    def wait_worker(self):
+        while True:
+            yield
 
 
 if __name__ == '__main__':
