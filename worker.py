@@ -28,7 +28,7 @@ class GameProtocol(asyncio.Protocol):
 
     def connection_lost(self, exc):
         client = self.transport.get_extra_info('peername')
-        logger.info('worker: connection to %s closed' % (client,))
+        logger.info('gameprotocol: connection to %s closed' % (client,))
         if exc:
             logger.info(exc)
 
@@ -36,10 +36,11 @@ class GameProtocol(asyncio.Protocol):
             self._connection_lost_callback(client)
 
     def data_received(self, data):
-        logger.info('worker: %s' % data.decode())
+        logger.info('gameprotocol: %s' % data.decode())
+        time.sleep(3)
 
     def eof_received(self):
-        logger.info('worker: eof')
+        logger.info('gameprotocol: eof')
         self.transport.close()
 
     def set_connection_lost_callback(self, callback):
@@ -67,16 +68,19 @@ class Worker:
         self.worker = worker
         self.server_sock = server_sock
         self.socks = []
-        self.loop = asyncio.new_event_loop()
-        self.loop.add_reader(self.server_sock, self.reader)
-        self.main_task = self.loop.create_task(self._main())
         self.clients = []
 
+        self._init()
         self._set_logger()
 
         logger.info('worker %s created' % self.worker)
 
         self.start()
+
+    def _init(self):
+        self.loop = asyncio.new_event_loop()
+        self.loop.add_reader(self.server_sock, self.reader)
+        self.main_task = self.loop.create_task(self._main())
 
     def _set_logger(self):
         global logger
@@ -90,13 +94,24 @@ class Worker:
     def _main(self):
         while True:
             yield from asyncio.sleep(1, loop=self.loop)
-            if not self.clients:
+            tasks = asyncio.Task.all_tasks(loop=self.loop)
+            tasks.remove(self.main_task)
+            if len(tasks) == 0 and not self.clients:
+                self.loop.stop()
                 logger.info('shutting down')
                 break
-        self.loop.stop()
+            logger.info(len(tasks))
+        # yield from self._wait_tasks()
+
+    @asyncio.coroutine
+    def _wait_tasks(self):
+        tasks = asyncio.Task.all_tasks(loop=self.loop)
+        tasks.remove(self.main_task)
+        logger.info(tasks)
+        if len(tasks) >= 1:
+            yield from asyncio.gather(*tasks, loop=self.loop)
 
     def start(self):
-        # self.loop.run_forever()
         self.loop.run_until_complete(self.main_task)
         self.loop.close()
         send_msg(self.server_sock, {'done': os.getpid()})
