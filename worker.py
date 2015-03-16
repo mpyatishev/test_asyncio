@@ -37,7 +37,8 @@ class GameProtocol(asyncio.Protocol):
 
     def data_received(self, data):
         logger.info('gameprotocol: %s' % data.decode())
-        time.sleep(3)
+        time.sleep(1)
+        self.transport.write(json.dumps('ok').encode())
 
     def eof_received(self):
         logger.info('gameprotocol: eof')
@@ -96,8 +97,10 @@ class Worker:
             yield from asyncio.sleep(1, loop=self.loop)
             tasks = asyncio.Task.all_tasks(loop=self.loop)
             tasks.remove(self.main_task)
+            if len(tasks) > 0:
+                yield from asyncio.gather(*tasks, loop=self.loop)
+                break
             if len(tasks) == 0 and not self.clients:
-                self.loop.stop()
                 logger.info('shutting down')
                 break
             logger.info(len(tasks))
