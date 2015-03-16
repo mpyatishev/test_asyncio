@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 ch = logging.StreamHandler()
 logger.addHandler(ch)
 logger.setLevel(logging.INFO)
-max_clients = 100
+max_clients = 10
 
 
 class NewClient:
@@ -45,12 +45,13 @@ class NewClient:
         message = json.loads(data.decode())
         logger.info('%s: data: %s' % (self.name, message))
 
-        logger.info('%s: sending name' % self.name)
-        self.transport.write(self.name.encode())
-        logger.info('%s: sending message' % self.name)
-        self.transport.write(str(self.name + ': help!').encode())
-
-        self.transport.close()
+        if message == 'ok':
+            self.transport.close()
+        else:
+            logger.info('%s: sending name' % self.name)
+            self.transport.write(self.name.encode())
+            logger.info('%s: sending message' % self.name)
+            self.transport.write(str(self.name + ': help!').encode())
 
     def eof_received(self):
         self.transport.close()
