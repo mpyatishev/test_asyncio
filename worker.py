@@ -9,11 +9,15 @@ import socket
 import threading
 import time
 
+from concurrent.futures import ThreadPoolExecutor
+
 from utils import send_msg, recv_msg
 
 logger = None
 
 q = queue.Queue()
+
+executor = ThreadPoolExecutor(5)
 
 
 class GameProtocol(asyncio.Protocol):
@@ -46,9 +50,13 @@ class GameProtocol(asyncio.Protocol):
         # logger.info(self.transport)
         logger.info('gameprotocol%s: %s' % (self.count, data.decode()))
         if 'help!' in data.decode():
-            time.sleep(0.5)
-            logger.info('gameprotocol%s: sending "ok"' % (self.count,))
-            self.transport.write(json.dumps('ok').encode())
+            self.loop.create_task(self.work())
+
+    @asyncio.coroutine
+    def work(self):
+        yield from self.loop.run_in_executor(executor, time.sleep, 1)
+        logger.info('gameprotocol%s: sending "ok"' % (self.count,))
+        self.transport.write(json.dumps('ok').encode())
 
     def eof_received(self):
         # logger.info(self.transport)
@@ -92,6 +100,7 @@ class Worker:
 
     def _init(self):
         self.loop = asyncio.new_event_loop()
+        self.loop.set_debug(True)
         self.main_task = self.loop.create_task(self._main())
         self.loop.add_reader(self.server_sock, self.reader)
 
