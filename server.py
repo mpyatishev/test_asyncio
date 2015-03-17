@@ -23,7 +23,7 @@ logger.setLevel(logging.INFO)
 
 
 class NewServer:
-    max_clients = 100
+    max_clients = 10
     workers = []
     clients_to_workers = {}
     socks_to_workers = {}
