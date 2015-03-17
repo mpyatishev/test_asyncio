@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 
 import asyncio
-import functools
 import json
 import logging
 import os
@@ -18,17 +17,25 @@ q = queue.Queue()
 
 
 class GameProtocol(asyncio.Protocol):
+    count = 0
+
     def __init__(self, loop):
         self.loop = loop
         self.transport = None
         self._connection_lost_callback = None
+        self.__class__.count += 1
+        self.count = self.__class__.count
+        logger.info('gameprotocol%s created' % self.count)
 
     def connection_made(self, transport):
         self.transport = transport
+        logger.info('gameprotocol%s: connection made' % self.count)
+        # logger.info(self.transport)
 
     def connection_lost(self, exc):
         client = self.transport.get_extra_info('peername')
-        logger.info('gameprotocol: connection to %s closed' % (client,))
+        # logger.info(self.transport)
+        logger.info('gameprotocol%s: connection to %s closed' % (self.count, client))
         if exc:
             logger.info(exc)
 
@@ -36,13 +43,18 @@ class GameProtocol(asyncio.Protocol):
             self._connection_lost_callback(client)
 
     def data_received(self, data):
-        logger.info('gameprotocol: %s' % data.decode())
-        time.sleep(1)
-        self.transport.write(json.dumps('ok').encode())
+        # logger.info(self.transport)
+        logger.info('gameprotocol%s: %s' % (self.count, data.decode()))
+        if 'help!' in data.decode():
+            time.sleep(0.5)
+            logger.info('gameprotocol%s: sending "ok"' % (self.count,))
+            self.transport.write(json.dumps('ok').encode())
 
     def eof_received(self):
-        logger.info('gameprotocol: eof')
+        # logger.info(self.transport)
+        logger.info('gameprotocol%s: eof' % self.count)
         self.transport.close()
+        # logger.info('gameprotocol%s: %s' % (self.count, self.transport))
 
     def set_connection_lost_callback(self, callback):
         self._connection_lost_callback = callback
@@ -80,8 +92,8 @@ class Worker:
 
     def _init(self):
         self.loop = asyncio.new_event_loop()
-        self.loop.add_reader(self.server_sock, self.reader)
         self.main_task = self.loop.create_task(self._main())
+        self.loop.add_reader(self.server_sock, self.reader)
 
     def _set_logger(self):
         global logger
@@ -95,24 +107,11 @@ class Worker:
     def _main(self):
         while True:
             yield from asyncio.sleep(1, loop=self.loop)
-            tasks = asyncio.Task.all_tasks(loop=self.loop)
+            tasks = [_ for _ in asyncio.Task.all_tasks(loop=self.loop) if not _.done()]
             tasks.remove(self.main_task)
-            if len(tasks) > 0:
-                yield from asyncio.gather(*tasks, loop=self.loop)
-                break
-            if len(tasks) == 0 and not self.clients:
+            if len(tasks) == 0:
                 logger.info('shutting down')
                 break
-            logger.info(len(tasks))
-        # yield from self._wait_tasks()
-
-    @asyncio.coroutine
-    def _wait_tasks(self):
-        tasks = asyncio.Task.all_tasks(loop=self.loop)
-        tasks.remove(self.main_task)
-        logger.info(tasks)
-        if len(tasks) >= 1:
-            yield from asyncio.gather(*tasks, loop=self.loop)
 
     def start(self):
         self.loop.run_until_complete(self.main_task)
@@ -136,24 +135,25 @@ class Worker:
                 proto = msg['proto']
                 for fd in fds:
                     sock = socket.fromfd(fd, family, type, proto)
-                    sock.setblocking(False)
                     self.socks.append(sock)
                     # logger.info(sock)
-                    coro = self.loop.create_connection(lambda: GameProtocol(self.loop),
-                                                       sock=sock)
-                    future = self.loop.create_task(coro)
-                    future.add_done_callback(functools.partial(self.client_connected,
-                                                               sock.getpeername()))
+                    protocol = GameProtocol(self.loop)
+                    protocol.set_connection_lost_callback(self.client_disconnected)
+                    coro = self.loop.create_connection(lambda: protocol, sock=sock)
+                    self.loop.create_task(coro)
+                    self.clients.append(sock.getpeername())
             else:
                 logger.info('worker %s received: %s' % (self.worker, msg))
 
     def client_connected(self, client, future):
         transport, protocol = future.result()
+        logger.info('%s %s' % (transport, protocol))
         protocol.set_connection_lost_callback(self.client_disconnected)
         self.clients.append(client)
 
     def client_disconnected(self, client):
-        send_msg(self.server_sock, client)
+        data = {'client': client}
+        send_msg(self.server_sock, data)
         self.clients.remove(client)
 
 
