@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 ch = logging.StreamHandler()
 logger.addHandler(ch)
 logger.setLevel(logging.INFO)
-max_clients = 10
+max_clients = 500
 
 
 class NewClient:
@@ -42,7 +42,12 @@ class NewClient:
         self._disconnected = True
 
     def data_received(self, data):
-        message = json.loads(data.decode())
+        try:
+            message = json.loads(data.decode())
+        except ValueError as e:
+            logger.info(e)
+            logger.info('%s: data: %s' % (self.name, data.decode()))
+            return
         logger.info('%s: data: %s' % (self.name, message))
 
         if message == 'ok':
