@@ -9,11 +9,8 @@ import json
 import logging
 import os
 import random
-import signal
 import socket
 import time
-
-from concurrent.futures import ProcessPoolExecutor
 
 from utils import send_msg, recv_msg
 from worker import Worker
@@ -31,7 +28,6 @@ class NewServer:
     clients_to_workers = {}
     socks_to_workers = {}
     pids_to_workers = {}
-    executor = ProcessPoolExecutor()
     loop = None
 
     def __init__(self, loop, *args, **kwargs):
@@ -171,7 +167,7 @@ class NewServer:
                 return worker
 
     def worker_done(self, worker):
-        result = os.waitpid(self.pids_to_workers[worker], 0)
+        os.waitpid(self.pids_to_workers[worker], 0)
         logger.info('%s done' % worker)
         self.loop.remove_reader(self.socks_to_workers[worker])
         self.socks_to_workers[worker].close()
@@ -180,11 +176,6 @@ class NewServer:
             if w == worker:
                 self.workers.remove((clients, w))
                 break
-
-    @asyncio.coroutine
-    def wait_worker(self):
-        while True:
-            yield
 
 
 if __name__ == '__main__':
