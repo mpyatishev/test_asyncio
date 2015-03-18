@@ -118,7 +118,7 @@ class Worker:
             yield from asyncio.sleep(1, loop=self.loop)
             tasks = [_ for _ in asyncio.Task.all_tasks(loop=self.loop) if not _.done()]
             tasks.remove(self.main_task)
-            if len(tasks) == 0:
+            if len(tasks) == 0 and not self.clients:
                 logger.info('shutting down')
                 break
 
