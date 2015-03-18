@@ -11,6 +11,8 @@ import time
 
 from concurrent.futures import ThreadPoolExecutor
 
+from aiohttp import web
+
 from utils import send_msg, recv_msg
 
 logger = None
@@ -84,6 +86,25 @@ class Game(threading.Thread):
             time.sleep(0.01)
 
 
+class BaseHandler:
+    def __init__(self, loop):
+        self._loop = loop
+
+    @asyncio.coroutine
+    def handle(self, request):
+        logger.info(request)
+        ws = web.WebSocketResponse()
+        ws.start(request)
+
+        while True:
+            try:
+                data = yield from ws.receive_str()
+                logger.info(data)
+            except web.WebSocketDisconnectedError as e:
+                logger.info(e)
+                return ws
+
+
 class Worker:
     def __init__(self, worker, server_sock):
         self.worker = worker
@@ -146,9 +167,15 @@ class Worker:
                     sock = socket.fromfd(fd, family, type, proto)
                     self.socks.append(sock)
                     # logger.info(sock)
-                    protocol = GameProtocol(self.loop)
-                    protocol.set_connection_lost_callback(self.client_disconnected)
-                    coro = self.loop.create_connection(lambda: protocol, sock=sock)
+                    # protocol = GameProtocol(self.loop)
+                    # protocol.set_connection_lost_callback(self.client_disconnected)
+                    # coro = self.loop.create_connection(lambda: protocol, sock=sock)
+                    handler = BaseHandler(self.loop)
+                    app = web.Application(loop=self.loop)
+                    app.router.add_route('GET', '/', handler.handle)
+                    handler = app.make_handler()()
+                    logger.info(handler)
+                    coro = self.loop.create_connection(lambda: handler, sock=sock)
                     self.loop.create_task(coro)
                     self.clients.append(sock.getpeername())
             else:
