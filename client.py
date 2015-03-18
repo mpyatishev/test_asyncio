@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 ch = logging.StreamHandler()
 logger.addHandler(ch)
 logger.setLevel(logging.INFO)
-max_clients = 1000
+max_clients = 3
 
 
 class NewClient:
@@ -56,6 +56,7 @@ class NewClient:
         else:
             logger.info('%s: sending name' % self.name)
             self.transport.write(self.name.encode())
+            self.transport.write('\r\n\r\n'.encode())
             logger.info('%s: sending message' % self.name)
             self.transport.write(str(self.name + ': help!').encode())
 
