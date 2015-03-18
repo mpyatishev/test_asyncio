@@ -6,6 +6,7 @@
 import asyncio
 import json
 import logging
+import random
 import time
 
 
@@ -13,7 +14,7 @@ logger = logging.getLogger(__name__)
 ch = logging.StreamHandler()
 logger.addHandler(ch)
 logger.setLevel(logging.INFO)
-max_clients = 500
+max_clients = 1000
 
 
 class NewClient:
@@ -35,7 +36,7 @@ class NewClient:
 
     def connection_lost(self, exc):
         info = self.transport.get_extra_info('peername')
-        logger.info('connection to %s closed' % (info,))
+        logger.info('%s: connection to %s closed' % (info, self.name))
         if exc:
             logger.info(exc)
 
@@ -51,15 +52,23 @@ class NewClient:
         logger.info('%s: data: %s' % (self.name, message))
 
         if message == 'ok':
-            self.transport.close()
+            self.loop.create_task(self.some_work())
         else:
             logger.info('%s: sending name' % self.name)
             self.transport.write(self.name.encode())
             logger.info('%s: sending message' % self.name)
             self.transport.write(str(self.name + ': help!').encode())
 
-    def eof_received(self):
+    @asyncio.coroutine
+    def some_work(self):
+        wait_secs = random.random() * 5
+        logger.info('%s: sleep for %s seconds' % (self.name, wait_secs))
+        yield from asyncio.sleep(wait_secs)
+        logger.info('%s: closing connection' % self.name)
         self.transport.close()
+
+    def eof_received(self):
+        pass
 
     def get_name(self):
         return 'client%s' % self.client_no
@@ -88,6 +97,7 @@ def wait_clients(loop, clients):
 if __name__ == '__main__':
     clients = []
     loop = asyncio.get_event_loop()
+    loop.set_debug(True)
     for i in range(max_clients):
         coro = loop.create_connection(lambda i=i: NewClient(loop, i),
                                       '127.0.0.1', port=8888)
